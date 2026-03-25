@@ -30,7 +30,9 @@ target_include_directories(imgui PUBLIC dependencies/imgui dependencies/include)
 add_executable(ROVER_Y 
     main.cpp
     opencv_backend.h
-    opencv_backend.cpp)
+    opencv_backend.cpp
+    imgui_opengl.h
+    imgui_opengl.cpp)
 
 # 5. Linking
 # If using manual paths for GLFW:
