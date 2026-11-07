@@ -66,3 +66,12 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Vendored prebuilt GLFW for Windows/MSVC (used by CMakeLists.txt)
+!dependencies/glfw/lib/glfw3.lib
+
+# OS / editor / runtime files
+.DS_Store
+imgui.ini
+.vscode/
+.idea/

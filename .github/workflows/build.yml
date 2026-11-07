@@ -1,0 +1,46 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake libopencv-dev opencv-data libgl1-mesa-dev libglfw3-dev
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: brew install opencv glfw
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install OpenCV
+        run: choco install opencv -y --no-progress
+      - name: Configure (MSVC x64, bundled GLFW)
+        run: cmake -S . -B build -A x64 -DOpenCV_DIR="C:/tools/opencv/build"
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Check output
+        shell: pwsh
+        run: Get-ChildItem build/Release

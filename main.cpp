@@ -1,10 +1,16 @@
 #include "dependencies/include/glad/glad.h"
 #include <GLFW/glfw3.h>
 #include <opencv2/core/utils/logger.hpp>
-#include "opencv_backend.h"
-#include "imgui_opengl.h"
+#include "Windows/opencv_backend.h"
+#include "Windows/imgui_opengl.h"
 #include "dependencies/imgui/imgui.h"
 #include "dependencies/imgui/imgui_impl_opengl3.h"
+#include <cstdlib>
+#include <vector>
+
+#ifdef __APPLE__
+bool RequestCameraAccess(); // macos/camera_permission.mm
+#endif
 
 int main(void) {
     // 1. Environment and Logging
@@ -13,14 +19,26 @@ int main(void) {
     _putenv("OPENCV_VIDEOIO_PRIORITY_OBSENSOR=0");
 #endif
     cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_SILENT);
+#ifdef __APPLE__
+    RequestCameraAccess(); // shows the macOS permission prompt and waits for the answer
+#endif
 
     // 2. Setup GLFW/GLAD
     if (!glfwInit()) return 1;
+#ifdef __APPLE__
+    // macOS only provides 3.2+ core, forward-compatible contexts
+    const char* glsl_version = "#version 150";
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+#else
     const char* glsl_version = "#version 130";
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+#endif
 
-    GLFWwindow* window = glfwCreateWindow(1024, 768, "Laptop Webcam Switcher", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(1400, 800, "TULPAR - Webcam Processing", NULL, NULL);
     if (!window) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1); 
@@ -31,26 +49,28 @@ int main(void) {
     InitImGui(window, glsl_version);
     
     cv::VideoCapture cap;
-    GLuint textureID = 0;
+    CameraTextures textures;
     int currentCameraIndex = -1;
     std::vector<int> availableCameras = GetAvailableCameraIndices();
 
     if (!availableCameras.empty()) {
         currentCameraIndex = availableCameras[0];
-        InitializeWebcam(cap, textureID, currentCameraIndex);
+        InitializeWebcam(cap, textures, currentCameraIndex);
     }
 
 
     EffectsSettings settings;
+    DetectionStats stats;
+    RuntimeControl control;
     // 4. Main Loop
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         
         if (cap.isOpened()) {
-            UpdateWebcamTexture(cap, textureID, settings);
+            UpdateWebcamTextures(cap, textures, settings, control, stats);
         }
 
-        RenderUI(cap, textureID, currentCameraIndex, availableCameras, settings);
+        RenderUI(cap, textures, currentCameraIndex, availableCameras, settings, control, stats);
 
         // Rendering
         ImGui::Render();
@@ -66,7 +86,7 @@ int main(void) {
 
     // 5. Cleanup
     cap.release();
-    if (textureID != 0) glDeleteTextures(1, &textureID);
+    DestroyTextures(textures);
     CleanupImGui();
     glfwDestroyWindow(window);
     glfwTerminate();
