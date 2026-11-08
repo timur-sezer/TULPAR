@@ -3,6 +3,7 @@
 #include "../dependencies/imgui/imgui_internal.h" // DockBuilder API
 #include "../dependencies/imgui/imgui_impl_glfw.h"
 #include "../dependencies/imgui/imgui_impl_opengl3.h"
+#include "font.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -23,6 +24,7 @@ void InitImGui(GLFWwindow* window, const char* glsl_version) {
     io.IniFilename = nullptr; // always start from the default docked layout
 
     ImGui::StyleColorsDark();
+    Font::embraceTheDarkness();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
 }
