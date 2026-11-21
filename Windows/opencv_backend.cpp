@@ -50,7 +50,8 @@ static cv::Mat g_lastFrame; // last captured (unmirrored) frame, reused while pa
 
 std::string BuildLibcameraPipeline(int width, int height, int fps, const std::string& cameraName) {
     std::string pipe = "libcamerasrc";
-    if (!cameraName.empty()) {
+    // Only pass camera-name if it is a specific device path (e.g. starting with '/')
+    if (!cameraName.empty() && cameraName.front() == '/') {
         pipe += " camera-name=\"" + cameraName + "\"";
     }
     pipe += " ! video/x-raw";
@@ -168,7 +169,7 @@ static std::vector<CameraDeviceInfo> ProbeLibcameraDevices() {
                             }
 
                             info.description = "libcamera / CSI (" + sensorName + ")";
-                            info.pathOrPipeline = BuildLibcameraPipeline(1280, 720, 30, sensorName);
+                            info.pathOrPipeline = BuildLibcameraPipeline(1280, 720, 30);
                             list.push_back(info);
                         }
                     }
@@ -496,11 +497,9 @@ bool InitializeCameraWithConfig(cv::VideoCapture& cap, CameraTextures& tex, cons
         if (gstOk) {
             std::string pipeline = pathOrPipe;
             if (camType == CAM_TYPE_LIBCAMERA && (pipeline.empty() || config.width != 1280 || config.height != 720)) {
-                std::string sensorName = (dev && dev->isArducam) ? "imx519" : "";
                 pipeline = BuildLibcameraPipeline(config.width > 0 ? config.width : 1280,
                                                   config.height > 0 ? config.height : 720,
-                                                  config.fps > 0 ? config.fps : 30,
-                                                  sensorName);
+                                                  config.fps > 0 ? config.fps : 30);
             }
             if (!pipeline.empty()) {
                 cap.open(pipeline, cv::CAP_GSTREAMER);

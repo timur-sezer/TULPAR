@@ -36,7 +36,14 @@ int main(void) {
 #endif
 
     // 2. Setup GLFW/GLAD
-    if (!glfwInit()) return 1;
+    glfwSetErrorCallback([](int error, const char* description) {
+        std::fprintf(stderr, "[GLFW Error %d]: %s\n", error, description ? description : "unknown");
+    });
+
+    if (!glfwInit()) {
+        std::fprintf(stderr, "Failed to initialize GLFW\n");
+        return 1;
+    }
 #ifdef __APPLE__
     // macOS only provides 3.2+ core, forward-compatible contexts
     const char* glsl_version = "#version 150";
@@ -51,11 +58,27 @@ int main(void) {
 #endif
 
     GLFWwindow* window = glfwCreateWindow(1400, 800, "TULPAR", NULL, NULL);
-    if (!window) { glfwTerminate(); return -1; }
+    if (!window) {
+        // Fallback to smaller resolutions for small screens / Pi displays
+        window = glfwCreateWindow(1280, 720, "TULPAR", NULL, NULL);
+    }
+    if (!window) {
+        window = glfwCreateWindow(1024, 600, "TULPAR", NULL, NULL);
+    }
+    if (!window) {
+        std::fprintf(stderr, "Failed to create GLFW window\n");
+        glfwTerminate();
+        return -1;
+    }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1); 
 
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+        std::fprintf(stderr, "Failed to initialize GLAD\n");
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return -1;
+    }
 
     // 3. Initialize Modules
     InitImGui(window, glsl_version);
