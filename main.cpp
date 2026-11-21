@@ -19,13 +19,17 @@ int main(void) {
     _putenv("OPENCV_VIDEOIO_PRIORITY_MSMF=0");
     _putenv("OPENCV_VIDEOIO_PRIORITY_OBSENSOR=0");
 #else
-    // On Linux, if LANG or LC_ALL is bare "UTF-8", libxkbcommon fails to locate
-    // the Compose file (/usr/share/X11/locale/UTF-8/Compose). Normalise to C.UTF-8.
-    const char* lang = std::getenv("LANG");
-    const char* lcAll = std::getenv("LC_ALL");
-    if ((!lang || !strcmp(lang, "UTF-8")) && (!lcAll || !strcmp(lcAll, "UTF-8"))) {
-        setenv("LC_ALL", "C.UTF-8", 1);
+    // If any locale variable is set to bare "UTF-8" (or empty), libxkbcommon fails
+    // to find a compose table on Wayland, aborting GLFW initialization.
+    for (const char* var : { "LC_ALL", "LC_CTYPE", "LANG", "LC_MESSAGES" }) {
+        const char* val = std::getenv(var);
+        if (val && (!strcmp(val, "UTF-8") || !strcmp(val, "utf8") || !strcmp(val, ""))) {
+            unsetenv(var);
+        }
     }
+    setenv("LC_ALL", "C.UTF-8", 0);
+    setenv("LANG", "C.UTF-8", 0);
+
     if (!std::getenv("GST_DEBUG")) {
         setenv("GST_DEBUG", "1", 0); // warnings/criticals only, no info spam
     }
@@ -41,8 +45,19 @@ int main(void) {
     });
 
     if (!glfwInit()) {
-        std::fprintf(stderr, "Failed to initialize GLFW\n");
-        return 1;
+        // If Wayland initialization failed (e.g. XKB compose table error in libglfw),
+        // fall back to X11 (via XWayland) which works universally on Raspberry Pi.
+        if (std::getenv("WAYLAND_DISPLAY")) {
+            std::fprintf(stderr, "Native Wayland init failed; falling back to X11/XWayland...\n");
+            unsetenv("WAYLAND_DISPLAY");
+            if (!glfwInit()) {
+                std::fprintf(stderr, "Failed to initialize GLFW (tried Wayland and X11)\n");
+                return 1;
+            }
+        } else {
+            std::fprintf(stderr, "Failed to initialize GLFW\n");
+            return 1;
+        }
     }
 #ifdef __APPLE__
     // macOS only provides 3.2+ core, forward-compatible contexts
