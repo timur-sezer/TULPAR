@@ -68,8 +68,30 @@ std::string BuildLibcameraPipeline(int width, int height, int fps, const std::st
 }
 
 #ifdef __linux__
+// Check whether a GStreamer element is installed *before* trying to build a
+// pipeline with it.  Returns true if `gst-inspect-1.0 <name>` succeeds.
+static bool HasGStreamerElement(const char* element) {
+    std::string cmd = std::string("gst-inspect-1.0 ") + element + " >/dev/null 2>&1";
+    return system(cmd.c_str()) == 0;
+}
+
+static bool g_hasLibcameraSrc = false; // cached result
+static bool g_hasLibcameraSrcChecked = false;
+
+static bool CheckLibcameraSrc() {
+    if (!g_hasLibcameraSrcChecked) {
+        g_hasLibcameraSrc = HasGStreamerElement("libcamerasrc");
+        g_hasLibcameraSrcChecked = true;
+    }
+    return g_hasLibcameraSrc;
+}
+
 static std::vector<CameraDeviceInfo> ProbeLibcameraDevices() {
     std::vector<CameraDeviceInfo> list;
+
+    // If the GStreamer libcamera element is not installed, skip this probe entirely.
+    if (!CheckLibcameraSrc()) return list;
+
     const char* cmds[] = { "rpicam-hello --list-cameras 2>/dev/null", "libcamera-hello --list-cameras 2>/dev/null" };
     for (const char* cmd : cmds) {
         FILE* fp = popen(cmd, "r");
@@ -156,8 +178,9 @@ static std::vector<CameraDeviceInfo> ProbeLibcameraDevices() {
         }
     }
 
-    // Check /sys/class/video4linux for unicam/pisp
-    DIR* d = opendir("/sys/class/video4linux");
+    // Check /sys/class/video4linux for unicam/pisp — but only if libcamerasrc is available
+    if (CheckLibcameraSrc()) {
+        DIR* d = opendir("/sys/class/video4linux");
     if (d) {
         struct dirent* entry;
         bool hasCSI = false;
@@ -190,6 +213,7 @@ static std::vector<CameraDeviceInfo> ProbeLibcameraDevices() {
             list.push_back(info);
         }
     }
+    } // end CheckLibcameraSrc guard
     return list;
 }
 
@@ -289,13 +313,27 @@ void RescanCameraDevices() {
             envDev.pathOrPipeline = camStr;
             envDev.description = "TULPAR_CAMERA pipeline";
         } else if (camStr == "libcamera" || camStr == "rpicam" || camStr == "arducam") {
-            envDev.name = "Raspberry Pi / Arducam (ENV)";
-            envDev.type = CAM_TYPE_LIBCAMERA;
-            envDev.pathOrPipeline = BuildLibcameraPipeline(1280, 720, 30);
-            envDev.isRaspberryPi = true;
-            envDev.isArducam = true;
-            envDev.supportsAutofocus = true;
-            envDev.description = "TULPAR_CAMERA libcamera";
+#ifdef __linux__
+            if (CheckLibcameraSrc()) {
+#endif
+                envDev.name = "Raspberry Pi / Arducam (ENV)";
+                envDev.type = CAM_TYPE_LIBCAMERA;
+                envDev.pathOrPipeline = BuildLibcameraPipeline(1280, 720, 30);
+                envDev.isRaspberryPi = true;
+                envDev.isArducam = true;
+                envDev.supportsAutofocus = true;
+                envDev.description = "TULPAR_CAMERA libcamera";
+#ifdef __linux__
+            } else {
+                // libcamerasrc not installed, fall back to V4L2 index 0
+                envDev.name = "Raspberry Pi / Arducam (V4L2 fallback)";
+                envDev.type = CAM_TYPE_V4L2;
+                envDev.v4l2Index = 0;
+                envDev.isRaspberryPi = true;
+                envDev.isArducam = true;
+                envDev.description = "TULPAR_CAMERA (libcamerasrc not found, using V4L2)";
+            }
+#endif
         } else if (camStr.rfind("/dev/video", 0) == 0) {
             envDev.name = "Camera Device (" + camStr + ")";
             envDev.type = CAM_TYPE_V4L2;
@@ -447,19 +485,27 @@ bool InitializeCameraWithConfig(cv::VideoCapture& cap, CameraTextures& tex, cons
 
     bool opened = false;
 
-    // 1. If custom GStreamer pipeline or LIBCAMERA:
+    // 1. If custom GStreamer pipeline or LIBCAMERA — but only attempt if GStreamer
+    //    has the required element (avoids gst_caps_get_structure CRITICAL spam).
     if (camType == CAM_TYPE_LIBCAMERA || camType == CAM_TYPE_GSTREAMER) {
-        std::string pipeline = pathOrPipe;
-        if (camType == CAM_TYPE_LIBCAMERA && (pipeline.empty() || config.width != 1280 || config.height != 720)) {
-            std::string sensorName = (dev && dev->isArducam) ? "imx519" : "";
-            pipeline = BuildLibcameraPipeline(config.width > 0 ? config.width : 1280,
-                                              config.height > 0 ? config.height : 720,
-                                              config.fps > 0 ? config.fps : 30,
-                                              sensorName);
-        }
-        if (!pipeline.empty()) {
-            cap.open(pipeline, cv::CAP_GSTREAMER);
-            if (cap.isOpened()) opened = true;
+#ifdef __linux__
+        bool gstOk = (camType == CAM_TYPE_GSTREAMER) || CheckLibcameraSrc();
+#else
+        bool gstOk = true;
+#endif
+        if (gstOk) {
+            std::string pipeline = pathOrPipe;
+            if (camType == CAM_TYPE_LIBCAMERA && (pipeline.empty() || config.width != 1280 || config.height != 720)) {
+                std::string sensorName = (dev && dev->isArducam) ? "imx519" : "";
+                pipeline = BuildLibcameraPipeline(config.width > 0 ? config.width : 1280,
+                                                  config.height > 0 ? config.height : 720,
+                                                  config.fps > 0 ? config.fps : 30,
+                                                  sensorName);
+            }
+            if (!pipeline.empty()) {
+                cap.open(pipeline, cv::CAP_GSTREAMER);
+                if (cap.isOpened()) opened = true;
+            }
         }
     }
 
@@ -480,8 +526,13 @@ bool InitializeCameraWithConfig(cv::VideoCapture& cap, CameraTextures& tex, cons
                 cap.open(pathOrPipe, cv::CAP_ANY);
             }
         }
+        // If explicit V4L2 index failed, try index 0 as a last resort
+        if (!cap.isOpened() && v4lIndex != 0) {
+            cap.open(0, cv::CAP_ANY);
+        }
         if (cap.isOpened()) {
             opened = true;
+            camType = CAM_TYPE_V4L2; // actually opened via V4L2, update for caps query below
 
             // Zero-latency buffer configuration
             cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
@@ -502,12 +553,15 @@ bool InitializeCameraWithConfig(cv::VideoCapture& cap, CameraTextures& tex, cons
         }
     }
 
-    // 3. Fallback: On Linux/Raspberry Pi, if standard open failed on index 0, try libcamera!
+    // 3. Fallback: On Linux/Raspberry Pi, if nothing worked, try libcamera (only if the element exists)
 #ifdef __linux__
-    if (!opened && (v4lIndex == 0 || config.deviceId == 0)) {
+    if (!opened && CheckLibcameraSrc()) {
         std::string fallbackPipe = BuildLibcameraPipeline(1280, 720, 30);
         cap.open(fallbackPipe, cv::CAP_GSTREAMER);
-        if (cap.isOpened()) opened = true;
+        if (cap.isOpened()) {
+            opened = true;
+            camType = CAM_TYPE_LIBCAMERA;
+        }
     }
 #endif
 
