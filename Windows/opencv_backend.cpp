@@ -513,11 +513,19 @@ bool InitializeCameraWithConfig(cv::VideoCapture& cap, CameraTextures& tex, cons
 
     if (!opened) return false;
 
-    double actualW = cap.get(cv::CAP_PROP_FRAME_WIDTH);
-    double actualH = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
-    if (actualW > 0 && actualH > 0) {
-        tex.width = (int)actualW;
-        tex.height = (int)actualH;
+    // Query dimensions immediately for V4L2 devices.
+    // For GStreamer / libcamera, dimensions are established on the first frame to avoid
+    // querying caps before pipeline negotiation (which causes GStreamer-CRITICAL assertions).
+    if (camType != CAM_TYPE_LIBCAMERA && camType != CAM_TYPE_GSTREAMER) {
+        double actualW = cap.get(cv::CAP_PROP_FRAME_WIDTH);
+        double actualH = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
+        if (actualW > 0 && actualH > 0) {
+            tex.width = (int)actualW;
+            tex.height = (int)actualH;
+        }
+    } else {
+        tex.width = config.width > 0 ? config.width : 1280;
+        tex.height = config.height > 0 ? config.height : 720;
     }
 
     if (tex.input == 0) tex.input = CreateTexture();
@@ -1120,6 +1128,8 @@ void UpdateWebcamTextures(cv::VideoCapture& cap, CameraTextures& tex, const Effe
         cap >> grabbed;
         if (grabbed.empty()) return;
         g_lastFrame = grabbed;
+        tex.width = grabbed.cols;
+        tex.height = grabbed.rows;
     }
     cv::Mat frame;
     if (s.mirror) cv::flip(g_lastFrame, frame, 1);

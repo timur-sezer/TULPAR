@@ -6,6 +6,7 @@
 #include "dependencies/imgui/imgui.h"
 #include "dependencies/imgui/imgui_impl_opengl3.h"
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 #ifdef __APPLE__
@@ -17,6 +18,17 @@ int main(void) {
 #ifdef _WIN32
     _putenv("OPENCV_VIDEOIO_PRIORITY_MSMF=0");
     _putenv("OPENCV_VIDEOIO_PRIORITY_OBSENSOR=0");
+#else
+    // On Linux, if LANG or LC_ALL is bare "UTF-8", libxkbcommon fails to locate
+    // the Compose file (/usr/share/X11/locale/UTF-8/Compose). Normalise to C.UTF-8.
+    const char* lang = std::getenv("LANG");
+    const char* lcAll = std::getenv("LC_ALL");
+    if ((!lang || !strcmp(lang, "UTF-8")) && (!lcAll || !strcmp(lcAll, "UTF-8"))) {
+        setenv("LC_ALL", "C.UTF-8", 1);
+    }
+    if (!std::getenv("GST_DEBUG")) {
+        setenv("GST_DEBUG", "1", 0); // warnings/criticals only, no info spam
+    }
 #endif
     cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_SILENT);
 #ifdef __APPLE__
