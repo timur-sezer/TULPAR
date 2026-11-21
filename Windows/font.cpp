@@ -1,125 +1,166 @@
 #include "font.h"
-#include "../dependencies/imgui/imgui.h"
+#include "icons.h"
+#include "../dependencies/fonts/inter_regular.h"
+#include "../dependencies/fonts/inter_semibold.h"
+#include "../dependencies/fonts/fa_solid.h"
 
 namespace Font {
-    void embraceTheDarkness()
-    {
-        ImVec4* colors = ImGui::GetStyle().Colors;
 
-        // Text
-        colors[ImGuiCol_Text] = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
-        colors[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
+static ImFont* s_regular = nullptr;
+static ImFont* s_semibold = nullptr;
+static ImFont* s_small = nullptr;
+static ImFont* s_heading = nullptr;
 
-        // Backgrounds
-        colors[ImGuiCol_WindowBg] = ImColor(20, 20, 20, 255).Value;
-        colors[ImGuiCol_ChildBg] = ImColor(30, 30, 30, 255).Value;
-        colors[ImGuiCol_PopupBg] = ImVec4(0.13f, 0.13f, 0.13f, 0.94f);
+ImFont* Regular()  { return s_regular; }
+ImFont* SemiBold() { return s_semibold; }
+ImFont* Small()    { return s_small; }
+ImFont* Heading()  { return s_heading; }
 
-        // Borders
-        colors[ImGuiCol_Border] = ImVec4(0.28f, 0.28f, 0.28f, 0.29f);
-        colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.24f);
+void Load(float contentScale) {
+    const float s = contentScale > 0.0f ? contentScale : 1.0f;
+    ImGuiIO& io = ImGui::GetIO();
+    io.Fonts->Clear();
 
-        // Frames
-        colors[ImGuiCol_FrameBg] = ImVec4(0.20f, 0.20f, 0.20f, 0.54f);
-        colors[ImGuiCol_FrameBgHovered] = ImVec4(0.25f, 0.25f, 0.25f, 0.74f);
-        colors[ImGuiCol_FrameBgActive] = ImVec4(0.28f, 0.28f, 0.28f, 1.00f);
+    // Latin + Latin-1 + Latin Extended-A (Turkish etc.), dashes, bullets, arrows
+    static const ImWchar textRanges[] = { 0x0020, 0x007E, 0x00A0, 0x017F, 0x2010, 0x2027, 0x2030, 0x203A,
+                                          0x2190, 0x2193, 0x2212, 0x2212, 0 };
+    static const ImWchar iconRanges[] = { ICON_MIN, ICON_MAX, 0 };
 
-        // Titles
-        colors[ImGuiCol_TitleBg] = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
-        colors[ImGuiCol_TitleBgActive] = ImVec4(0.15f, 0.15f, 0.15f, 1.00f);
-        colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
+    ImFontConfig cfg;
+    cfg.FontDataOwnedByAtlas = false;      // data is a static array
+    cfg.OversampleH = s > 1.5f ? 1 : 2;    // native-resolution Retina text needs no oversampling
+    cfg.OversampleV = 1;
 
-        // Menus
-        colors[ImGuiCol_MenuBarBg] = ImVec4(0.14f, 0.14f, 0.14f, 1.00f);
+    auto add = [&](const unsigned char* data, int size, float px) {
+        ImFont* f = io.Fonts->AddFontFromMemoryTTF((void*)data, size, px * s, &cfg, textRanges);
+        ImFontConfig icons = cfg;
+        icons.MergeMode = true;
+        icons.PixelSnapH = true;
+        icons.GlyphMinAdvanceX = px * s * 1.2f; // fixed-width icons line up in lists
+        icons.GlyphOffset = ImVec2(0, px * s * 0.02f);
+        io.Fonts->AddFontFromMemoryTTF((void*)kFaSolid, kFaSolid_size, px * s * 0.86f, &icons, iconRanges);
+        return f;
+    };
+    s_regular  = add(kInterRegular, kInterRegular_size, 15.0f);
+    s_semibold = add(kInterSemiBold, kInterSemiBold_size, 15.0f);
+    s_small    = add(kInterRegular, kInterRegular_size, 12.5f);
+    s_heading  = add(kInterSemiBold, kInterSemiBold_size, 17.0f);
+    io.FontDefault = s_regular;
 
-        // Scrollbars
-        colors[ImGuiCol_ScrollbarBg] = ImVec4(0.10f, 0.10f, 0.10f, 0.54f);
-        colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.40f, 0.40f, 0.40f, 0.54f);
-        colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.50f, 0.50f, 0.50f, 0.74f);
-        colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.70f, 0.70f, 0.70f, 0.74f);
-
-        // Controls
-        colors[ImGuiCol_CheckMark] = ImVec4(0.33f, 0.67f, 0.86f, 1.00f);
-        colors[ImGuiCol_SliderGrab] = ImVec4(0.30f, 0.30f, 0.30f, 0.54f);
-        colors[ImGuiCol_SliderGrabActive] = ImVec4(0.56f, 0.56f, 0.56f, 0.74f);
-
-        // Buttons
-        colors[ImGuiCol_Button] = ImVec4(0.20f, 0.20f, 0.20f, 0.54f);
-        colors[ImGuiCol_ButtonHovered] = ImVec4(0.30f, 0.30f, 0.30f, 0.74f);
-        colors[ImGuiCol_ButtonActive] = ImVec4(0.35f, 0.35f, 0.35f, 1.00f);
-
-        // Headers
-        colors[ImGuiCol_Header] = ImVec4(0.30f, 0.30f, 0.30f, 0.52f);
-        colors[ImGuiCol_HeaderHovered] = ImVec4(0.38f, 0.38f, 0.38f, 0.36f);
-        colors[ImGuiCol_HeaderActive] = ImVec4(0.47f, 0.47f, 0.47f, 0.33f);
-
-        // Separators
-        colors[ImGuiCol_Separator] = ImVec4(0.28f, 0.28f, 0.28f, 0.29f);
-        colors[ImGuiCol_SeparatorHovered] = ImVec4(0.44f, 0.44f, 0.44f, 0.74f);
-        colors[ImGuiCol_SeparatorActive] = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
-
-        // Resize grips
-        colors[ImGuiCol_ResizeGrip] = ImVec4(0.28f, 0.28f, 0.28f, 0.29f);
-        colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.44f, 0.44f, 0.44f, 0.74f);
-        colors[ImGuiCol_ResizeGripActive] = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
-
-        // Tabs
-        colors[ImGuiCol_Tab] = ImVec4(0.18f, 0.18f, 0.18f, 0.86f);
-        colors[ImGuiCol_TabHovered] = ImVec4(0.28f, 0.28f, 0.28f, 0.80f);
-        colors[ImGuiCol_TabActive] = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
-        colors[ImGuiCol_TabUnfocused] = ImVec4(0.15f, 0.15f, 0.15f, 0.52f);
-        colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.18f, 0.18f, 0.18f, 1.00f);
-
-        // Docking
-        colors[ImGuiCol_DockingPreview] = ImVec4(0.33f, 0.67f, 0.86f, 0.40f);
-        colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.20f, 0.20f, 0.20f, 1.00f);
-
-        // Plots
-        colors[ImGuiCol_PlotLines] = ImVec4(0.61f, 0.61f, 0.61f, 1.00f);
-        colors[ImGuiCol_PlotLinesHovered] = ImVec4(1.00f, 0.43f, 0.35f, 1.00f);
-        colors[ImGuiCol_PlotHistogram] = ImVec4(0.90f, 0.70f, 0.00f, 1.00f);
-        colors[ImGuiCol_PlotHistogramHovered] = ImVec4(1.00f, 0.60f, 0.00f, 1.00f);
-
-        // Tables
-        colors[ImGuiCol_TableHeaderBg] = ImVec4(0.25f, 0.25f, 0.25f, 0.52f);
-        colors[ImGuiCol_TableBorderStrong] = ImVec4(0.31f, 0.31f, 0.31f, 0.50f);
-        colors[ImGuiCol_TableBorderLight] = ImVec4(0.23f, 0.23f, 0.23f, 0.29f);
-        colors[ImGuiCol_TableRowBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-        colors[ImGuiCol_TableRowBgAlt] = ImVec4(1.00f, 1.00f, 1.00f, 0.05f);
-
-        // Misc
-        colors[ImGuiCol_TextSelectedBg] = ImVec4(0.33f, 0.67f, 0.86f, 0.35f);
-        colors[ImGuiCol_DragDropTarget] = ImVec4(0.33f, 0.67f, 0.86f, 0.90f);
-        colors[ImGuiCol_NavHighlight] = ImVec4(0.33f, 0.67f, 0.86f, 1.00f);
-        colors[ImGuiCol_NavWindowingHighlight] = ImVec4(0.33f, 0.67f, 0.86f, 0.70f);
-        colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
-        colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.35f);
-
-        ImGuiStyle& style = ImGui::GetStyle();
-
-        style.WindowPadding = ImVec2(5.00f, 5.00f);
-        style.FramePadding = ImVec2(8.00f, 5.00f);
-        style.CellPadding = ImVec2(4.00f, 8.00f);
-        style.ItemSpacing = ImVec2(5.00f, 5.00f);
-        style.ItemInnerSpacing = ImVec2(6.00f, 6.00f);
-        style.TouchExtraPadding = ImVec2(0.00f, 0.00f);
-        style.IndentSpacing = 10;
-        style.ScrollbarSize = 8;
-        style.GrabMinSize = 4;
-        style.WindowBorderSize = 0;
-        style.ChildBorderSize = 0;
-        style.PopupBorderSize = 0;
-        style.FrameBorderSize = 0;
-        style.TabBorderSize = 0;
-        style.WindowRounding = 10;
-        style.ChildRounding = 10;
-        style.FrameRounding = 10;
-        style.PopupRounding = 10;
-        style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
-        style.SeparatorTextAlign = ImVec2(0.5f, 0.5f);
-        style.ScrollbarRounding = 10;
-        style.GrabRounding = 3;
-        style.LogSliderDeadzone = 4;
-        style.TabRounding = 4;
-    }
+#ifdef __APPLE__
+    // macOS works in points: rasterize at pixel size, draw at point size.
+    io.FontGlobalScale = 1.0f / s;
+#else
+    // Windows/Linux work in pixels: scale the whole UI up instead.
+    ImGui::GetStyle().ScaleAllSizes(s);
+#endif
 }
+
+void embraceTheDarkness() {
+    using namespace Theme;
+    ImGuiStyle& style = ImGui::GetStyle();
+    ImVec4* c = style.Colors;
+
+    c[ImGuiCol_Text]                  = Text;
+    c[ImGuiCol_TextDisabled]          = TextMuted;
+    c[ImGuiCol_WindowBg]              = Panel;
+    c[ImGuiCol_ChildBg]               = Alpha(Panel, 0.0f);
+    c[ImGuiCol_PopupBg]               = Hex(0x16191E, 0.98f);
+    c[ImGuiCol_Border]                = Border;
+    c[ImGuiCol_BorderShadow]          = Alpha(Border, 0.0f);
+
+    c[ImGuiCol_FrameBg]               = Surface;
+    c[ImGuiCol_FrameBgHovered]        = SurfaceHover;
+    c[ImGuiCol_FrameBgActive]         = SurfaceActive;
+
+    c[ImGuiCol_TitleBg]               = Chrome;
+    c[ImGuiCol_TitleBgActive]         = Chrome;
+    c[ImGuiCol_TitleBgCollapsed]      = Chrome;
+    c[ImGuiCol_MenuBarBg]             = Chrome;
+
+    c[ImGuiCol_ScrollbarBg]           = Alpha(Panel, 0.0f);
+    c[ImGuiCol_ScrollbarGrab]         = SurfaceActive;
+    c[ImGuiCol_ScrollbarGrabHovered]  = BorderStrong;
+    c[ImGuiCol_ScrollbarGrabActive]   = TextFaint;
+
+    c[ImGuiCol_CheckMark]             = Accent;
+    c[ImGuiCol_SliderGrab]            = Alpha(Accent, 0.85f);
+    c[ImGuiCol_SliderGrabActive]      = AccentHover;
+
+    c[ImGuiCol_Button]                = Surface;
+    c[ImGuiCol_ButtonHovered]         = SurfaceHover;
+    c[ImGuiCol_ButtonActive]          = SurfaceActive;
+
+    c[ImGuiCol_Header]                = Surface;      // collapsing headers, selected list items
+    c[ImGuiCol_HeaderHovered]         = SurfaceHover;
+    c[ImGuiCol_HeaderActive]          = SurfaceActive;
+
+    c[ImGuiCol_Separator]             = Border;
+    c[ImGuiCol_SeparatorHovered]      = Alpha(Accent, 0.6f);
+    c[ImGuiCol_SeparatorActive]       = Accent;
+
+    c[ImGuiCol_ResizeGrip]            = Alpha(Panel, 0.0f);
+    c[ImGuiCol_ResizeGripHovered]     = Alpha(Accent, 0.5f);
+    c[ImGuiCol_ResizeGripActive]      = Accent;
+
+    // Docked window tabs: the active one blends into its panel
+    c[ImGuiCol_Tab]                   = Chrome;
+    c[ImGuiCol_TabHovered]            = SurfaceHover;
+    c[ImGuiCol_TabActive]             = Panel;
+    c[ImGuiCol_TabUnfocused]          = Chrome;
+    c[ImGuiCol_TabUnfocusedActive]    = Panel;
+
+    c[ImGuiCol_DockingPreview]        = Alpha(Accent, 0.35f);
+    c[ImGuiCol_DockingEmptyBg]        = Chrome;
+
+    c[ImGuiCol_PlotLines]             = TextMuted;
+    c[ImGuiCol_PlotLinesHovered]      = Accent;
+    c[ImGuiCol_PlotHistogram]         = Accent;
+    c[ImGuiCol_PlotHistogramHovered]  = AccentHover;
+
+    c[ImGuiCol_TableHeaderBg]         = Surface;
+    c[ImGuiCol_TableBorderStrong]     = Border;
+    c[ImGuiCol_TableBorderLight]      = Alpha(Border, 0.6f);
+    c[ImGuiCol_TableRowBg]            = Alpha(Panel, 0.0f);
+    c[ImGuiCol_TableRowBgAlt]         = Hex(0xFFFFFF, 0.025f);
+
+    c[ImGuiCol_TextSelectedBg]        = Alpha(Accent, 0.35f);
+    c[ImGuiCol_DragDropTarget]        = Accent;
+    c[ImGuiCol_NavHighlight]          = Accent;
+    c[ImGuiCol_NavWindowingHighlight] = Alpha(Accent, 0.7f);
+    c[ImGuiCol_NavWindowingDimBg]     = Hex(0x000000, 0.4f);
+    c[ImGuiCol_ModalWindowDimBg]      = Hex(0x000000, 0.5f);
+
+    style.WindowPadding            = ImVec2(14, 12);
+    style.FramePadding             = ImVec2(10, 6);
+    style.CellPadding              = ImVec2(8, 5);
+    style.ItemSpacing              = ImVec2(8, 8);
+    style.ItemInnerSpacing         = ImVec2(8, 6);
+    style.IndentSpacing            = 14;
+    style.ScrollbarSize            = 10;
+    style.GrabMinSize              = 6;
+
+    style.WindowBorderSize         = 0;
+    style.ChildBorderSize          = 0;
+    style.PopupBorderSize          = 1;
+    style.FrameBorderSize          = 0;
+    style.TabBorderSize            = 0;
+
+    style.WindowRounding           = 0;   // docked panels sit edge to edge
+    style.ChildRounding            = 8;
+    style.FrameRounding            = 6;
+    style.PopupRounding            = 8;
+    style.ScrollbarRounding        = 6;
+    style.GrabRounding             = 4;
+    style.TabRounding              = 6;
+
+    style.WindowTitleAlign         = ImVec2(0.0f, 0.5f);
+    style.WindowMenuButtonPosition = ImGuiDir_None; // no dock-menu triangle on the tabs
+    style.SeparatorTextAlign       = ImVec2(0.0f, 0.5f);
+    style.SeparatorTextBorderSize  = 1;
+    style.SeparatorTextPadding     = ImVec2(0, 4);
+    style.ButtonTextAlign          = ImVec2(0.5f, 0.5f);
+    style.LogSliderDeadzone        = 4;
+}
+
+} // namespace Font

@@ -8,14 +8,22 @@ It's meant for experimenting with computer vision for a robot or rover: finding 
 following a coloured object, reading markers and QR codes, and detecting motion.
 
 ```
-┌──────────────────┬─────────────────────┬─────────────────────┐
-│ Camera Settings  │                     │                     │
-├──────────────────┤     Input Feed      │     Output Feed     │
-│ Image Processing │  (raw camera image) │ (processed + drawn  │
-│  Filters│Detect  │                     │   detections)       │
-│  Objects│Tracking│                     │                     │
-└──────────────────┴─────────────────────┴─────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│ TULPAR        [ Design | Pipeline ]     Camera ▾  ⇆ ❚❚ ◉  ● Live │
+├──────────────────┬─────────────────────┬────────────────────────┤
+│ Processing       │                     │                        │
+│  Output · Results│       Input         │        Output          │
+│  Filters│Detect  │  (raw camera image) │ (processed + drawn     │
+│  Objects│Tracking│                     │   detections)          │
+├──────────────────┴─────────────────────┴────────────────────────┤
+│ ● Camera 0 · 1280 × 720   Processing at 640 × 360   4.2 ms  60 fps │
+└─────────────────────────────────────────────────────────────────┘
 ```
+
+The header switches between the **Design** page (above) and the **Pipeline** page
+(see [Node editor](#node-editor-pipeline-page)), where you build a pipeline visually by
+wiring OpenCV nodes together. The camera controls live in the header on both pages,
+and the status bar at the bottom shows the camera, resolution, timing and frame rate.
 
 All panels are docked when the app starts. You can drag the tabs to rearrange them, and
 the next launch goes back to this layout.
@@ -24,25 +32,26 @@ the next launch goes back to this layout.
 
 ## Features
 
-### Camera Settings
-- Choose between the connected cameras and refresh the list.
+### Camera controls (header)
+- Choose between the connected cameras; **Rescan devices** at the bottom of the list refreshes it.
+- **Mirror** flips the image horizontally (applies to both pages).
 - **Pause** freezes the current frame. Settings still apply to it, so you can tune them on a still image.
 - **Snapshot** saves the input and output images to `~/Pictures/TULPAR/`.
-- Mirror toggle, plus camera and processing resolution.
+- The pill on the right shows whether the camera is live, paused or missing.
 
 ### Image Processing
-A **Results** section at the top shows processing time, FPS and counts for everything that's
-detected, plus an optional live colour histogram. The **Output View** setting chooses what
-the Output Feed shows:
+A **Live results** card at the top shows processing time, FPS and counts for everything that's
+detected, plus an optional live colour histogram. The **View** setting chooses what
+the Output window shows:
 
-| Output View | Shows |
+| View | Shows |
 |---|---|
 | Processed | The colour image after the filters |
 | Binary / Edges | The black-and-white result of the mask, threshold, edge and morphology steps |
 | Original + Overlay | The untouched frame with detections drawn on top |
 | Motion Mask | The moving areas found by motion detection |
 
-**Processing Scale** runs the pipeline at a lower resolution. It's the main way to speed things up.
+**Scale** (under Output) runs the pipeline at a lower resolution. It's the main way to speed things up.
 
 #### Filters tab
 | Section | Options |
@@ -94,10 +103,64 @@ If you turn on shape detection without a mask, threshold or edge step, Canny edg
 1. Open **Detect → Contours & Shape Detection** and tick **Detect Shapes**.
 2. Hold a printed shape in front of the camera.
 3. If the result is noisy, open the **Filters** tab and set **Threshold → Otsu** and **Morphology → Close**.
-4. Set **Output View → Binary / Edges** to see what the detector is working on.
+4. Set **View → Binary / Edges** to see what the detector is working on.
 
 To follow a coloured object: **Tracking → Track Color**, click a colour preset, then
 adjust the Hue, Saturation and Value ranges until only the object is picked up.
+
+---
+
+## Node editor (Pipeline page)
+
+```
+┌────────────┬────────────────────────────────────────┐
+│ Nodes      │              Node Editor               │
+│  (search)  │   Camera ─▶ Gray ─▶ Canny ─▶ Output     │
+│  Color     ├──────────────────┬─────────────────────┤
+│  Filter    │      Input       │   Pipeline Output   │
+│  …         │                  │                     │
+└────────────┴──────────────────┴─────────────────────┘
+```
+
+- Drag a node from the **Nodes** list into the **Node Editor** (or double-click it).
+- Drag from an output pin (right side) to an input pin (left side) to connect nodes.
+  Dragging a connected input pin picks the link up again.
+- Whatever reaches the **Output** node is shown in **Pipeline Output**. Turn on
+  **Preview selection** to see any intermediate step instead.
+- Detection nodes have an optional **Draw on** input: detect on a mask, draw the results on the camera image.
+- **Example** builds Camera → Gray → Blur → Canny → Dilate → Contours (drawn on the camera image),
+  with the steps organised into two groups.
+
+### Navigating and editing
+
+| Action | How |
+|---|---|
+| Zoom | Mouse wheel (zooms around the cursor), or **−** / **%** / **+** in the toolbar. Below 50% nodes show only their titles |
+| Pan | Right- or middle-drag, or drag the view rectangle in the **minimap** (bottom-right) |
+| Fit everything in view | **Fit** or `F` |
+| Select | Click a node; drag on empty space for a box selection; Shift/Ctrl-click to add or remove |
+| Move | Drag a node (moves the whole selection); **Snap** aligns nodes to the grid when you let go |
+| Duplicate | `Ctrl+D` (copies settings; links between the copied nodes are copied too) |
+| Delete | `Del` / `Backspace`, or right-click → Delete |
+| Cut a link | `Alt`-click it, or right-click it → Delete link |
+| Right-click menu | On empty space: add node, new group, select all, fit. On a node, link or group: its actions |
+
+On macOS use `Cmd` instead of `Ctrl` and `Option` instead of `Alt`.
+
+### Groups
+Groups are colored frames that organise a pipeline into steps.
+
+- **Create:** select nodes and press `Ctrl+G` (or **Group** in the toolbar), or right-click empty space → New group.
+- **Move:** drag the group's title bar; every node inside it moves along.
+- **Resize:** drag the bottom-right corner.
+- **Rename:** double-click the title (Enter to confirm, Esc to cancel).
+- **Recolor / remove:** right-click the title. Removing a group keeps its nodes.
+
+Available nodes: Color (Grayscale, HSV Range, Brightness/Contrast, Equalize, CLAHE, Invert),
+Filter (Gaussian, Median, Bilateral, Sharpen, Resize), Threshold (Fixed/Otsu, Adaptive),
+Edges (Canny, Sobel, Laplacian), Morphology, Combine (Apply Mask, Blend, Bitwise) and
+Detection (Contours/Shapes, Hough Circles, Hough Lines, Corners, Keypoints, Haar Cascade,
+QR Code, ArUco Markers, Motion).
 
 ---
 
@@ -128,18 +191,41 @@ shows the **camera permission** prompt. If you click Don't Allow, turn it back o
 > The app is signed with a temporary signature that changes on every build, so macOS may
 > ask for camera permission again after each rebuild.
 
-### Linux (Ubuntu / Debian)
+### Linux (Ubuntu / Debian / Raspberry Pi OS)
 
 ```sh
-sudo apt install build-essential cmake libopencv-dev opencv-data libgl1-mesa-dev libglfw3-dev
+sudo apt install build-essential cmake libopencv-dev opencv-data libgl1-mesa-dev libglfw3-dev \
+    v4l-utils gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad gstreamer1.0-libcamera
 cmake -S . -B build
 cmake --build build -j
 ./build/TULPAR
 ```
 
-`opencv-data` provides the Haar files used by the face and object detectors. Other
-distributions need the same packages under their own names (OpenCV, GLFW, OpenGL/Mesa
-development files).
+`opencv-data` provides the Haar files used by the face and object detectors. On Raspberry Pi OS,
+the `gstreamer1.0-libcamera` and GStreamer plugins provide seamless hardware access to CSI cameras.
+
+#### Raspberry Pi & Arducam Compatibility
+
+TULPAR natively supports **official Raspberry Pi Camera Modules** and **Arducam** (both MIPI CSI and USB models):
+
+- **Raspberry Pi Camera Modules (CSI / libcamera):**
+  - Official Camera Modules v1 (OV5647), v2 (IMX219), v3 (IMX708 Autofocus), HQ Camera (IMX477), and Global Shutter Camera (IMX296).
+  - Modern Raspberry Pi OS (Bullseye & Bookworm) uses `libcamera`. TULPAR discovers and connects to them using an optimized GStreamer pipeline (`libcamerasrc`) with zero-latency buffer dropping (`appsink drop=true max-buffers=1`).
+- **Arducam MIPI CSI Cameras:**
+  - 16MP Autofocus (IMX519), 64MP Hawkeye / OwlSight, OV9281 monochrome Global Shutter, AR0234 Global Shutter, IMX462 Ultra Low Light, etc.
+  - Automatically detected and badged with `[Arducam]` in the camera selector.
+- **Arducam & UVC USB Cameras:**
+  - High-speed MJPEG stream negotiation (`CAP_PROP_FOURCC = MJPG`) prevents USB 2.0 bandwidth bottlenecks and guarantees full 30/60 fps at 720p/1080p.
+  - 1-frame V4L2 queue buffer (`CAP_PROP_BUFFERSIZE = 1`) eliminates video display lag in real-time vision loops.
+  - Automatic filtering out of Raspberry Pi internal ISP and hardware codec device nodes (`bcm2835-isp`, `bcm2835-codec`, `pispbe`).
+- **Hardware Autofocus Controls:**
+  - Direct hardware autofocus control from the UI (click the sliders icon next to the camera selector): continuous autofocus toggle, one-shot AF sweep trigger, and manual focus slider (0–1023).
+- **Environment Variables & Custom Pipelines:**
+  - Set `TULPAR_CAMERA` to override the camera source on startup:
+    - `TULPAR_CAMERA="libcamera"` (connect to the default libcamera sensor)
+    - `TULPAR_CAMERA="/dev/video0"` (connect to a specific V4L2 device)
+    - `TULPAR_CAMERA="libcamerasrc ! video/x-raw, width=1280, height=720 ! videoconvert ! appsink drop=true"` (custom GStreamer pipeline)
 
 #### Docker
 
@@ -193,7 +279,10 @@ variable to the `haarcascades` folder before running the app.
 | "No cameras detected!" on Linux | Make sure your user can open `/dev/video*` (usually by joining the `video` group) |
 | "Cascade not found" | Install `opencv-data` (Linux) or set `OPENCV_CASCADE_DIR` |
 | "ArUco needs OpenCV 4.7+" | Upgrade OpenCV; every other feature still works |
-| Low FPS | Lower **Processing Scale** and turn off detectors you aren't using. Bilateral blur and SIFT are the slowest |
+| Pi Camera (CSI) not showing | Install `gstreamer1.0-libcamera` and test with `rpicam-hello` |
+| Arducam USB low framerate | In Camera Settings, set Pixel Format to **MJPEG** |
+| Arducam Autofocus not focusing | Click **Trigger AF Sweep** or adjust the **Manual Focus** slider in Camera Settings |
+| Low FPS | Lower **Scale** and turn off detectors you aren't using. Bilateral blur and SIFT are the slowest |
 | `TULPAR.exe` fails to start with a missing `opencv_world*.dll` | Use CMake 3.21+ or add OpenCV's `bin` folder to `PATH` |
 
 ---
@@ -204,7 +293,10 @@ variable to the `haarcascades` folder before running the app.
 main.cpp                    entry point: window, OpenGL context, main loop
 Windows/                    app code (cross-platform, despite the name)
   opencv_backend.h/.cpp     camera capture and the processing/detection steps
-  imgui_opengl.h/.cpp       docked ImGui interface
+  imgui_opengl.h/.cpp       docked ImGui interface: header, status bar, Design and Pipeline pages
+  node_editor.h/.cpp        node-based OpenCV pipeline editor (Pipeline page)
+  font.h/.cpp               theme (color tokens, spacing) and embedded fonts
+  icons.h                   icon names for the embedded icon font
 macos/
   Info.plist.in             app bundle settings (camera permission text)
   camera_permission.mm      asks for camera access before startup
@@ -212,6 +304,7 @@ dependencies/
   glad.c, include/          OpenGL loader (glad)
   imgui/                    Dear ImGui (docking branch) with GLFW/OpenGL3 backends
   glfw/                     prebuilt GLFW 3.3.8 for Windows/MSVC
+  fonts/                    Inter + Font Awesome (subset, embedded as C arrays) and their licenses
 Dockerfile                  Linux build image
 .github/workflows/build.yml CI for Linux, macOS and Windows
 ```
@@ -221,3 +314,4 @@ Dockerfile                  Linux build image
 - [Dear ImGui](https://github.com/ocornut/imgui) (docking branch): user interface
 - [GLFW](https://www.glfw.org/): window and input
 - [glad](https://github.com/Dav1dde/glad): OpenGL loader
+- [Inter](https://rsms.me/inter/) and [Font Awesome Free](https://fontawesome.com/) icons (SIL Open Font License 1.1)

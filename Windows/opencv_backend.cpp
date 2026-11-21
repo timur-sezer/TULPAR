@@ -15,14 +15,26 @@
 #define HAVE_ARUCO 1
 #endif
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
+
+#ifdef __linux__
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/videodev2.h>
+#include <dirent.h>
+#endif
 
 #ifndef OPENCV_CASCADE_DIR
 #define OPENCV_CASCADE_DIR ""
@@ -32,16 +44,337 @@
 // Camera + texture management
 // ============================================================
 
-std::vector<int> GetAvailableCameraIndices() {
-    std::vector<int> availableIndices;
-    for (int i = 0; i < 5; ++i) {
+static std::vector<CameraDeviceInfo> g_availableDevices;
+static CameraConfig g_activeCameraConfig;
+static cv::Mat g_lastFrame; // last captured (unmirrored) frame, reused while paused
+
+std::string BuildLibcameraPipeline(int width, int height, int fps, const std::string& cameraName) {
+    std::string pipe = "libcamerasrc";
+    if (!cameraName.empty()) {
+        pipe += " camera-name=\"" + cameraName + "\"";
+    }
+    pipe += " ! video/x-raw";
+    if (width > 0 && height > 0) {
+        pipe += ", width=" + std::to_string(width) + ", height=" + std::to_string(height);
+    }
+    if (fps > 0) {
+        pipe += ", framerate=" + std::to_string(fps) + "/1";
+    }
+    pipe += " ! queue leaky=downstream max-size-buffers=1";
+    pipe += " ! videoconvert";
+    pipe += " ! video/x-raw, format=BGR";
+    pipe += " ! appsink max-buffers=1 drop=true";
+    return pipe;
+}
+
+#ifdef __linux__
+static std::vector<CameraDeviceInfo> ProbeLibcameraDevices() {
+    std::vector<CameraDeviceInfo> list;
+    const char* cmds[] = { "rpicam-hello --list-cameras 2>/dev/null", "libcamera-hello --list-cameras 2>/dev/null" };
+    for (const char* cmd : cmds) {
+        FILE* fp = popen(cmd, "r");
+        if (fp) {
+            char buffer[512];
+            std::string output;
+            while (fgets(buffer, sizeof(buffer), fp)) {
+                output += buffer;
+            }
+            pclose(fp);
+
+            if (!output.empty() && output.find("Available cameras") != std::string::npos) {
+                std::istringstream stream(output);
+                std::string line;
+                while (std::getline(stream, line)) {
+                    size_t colon = line.find(" : ");
+                    if (colon != std::string::npos) {
+                        std::string idxStr = line.substr(0, colon);
+                        idxStr.erase(0, idxStr.find_first_not_of(" \t"));
+                        idxStr.erase(idxStr.find_last_not_of(" \t") + 1);
+                        if (!idxStr.empty() && std::isdigit(idxStr[0])) {
+                            int camIdx = std::stoi(idxStr);
+                            std::string rest = line.substr(colon + 3);
+                            std::string sensorName = rest;
+                            size_t space = rest.find(' ');
+                            if (space != std::string::npos) sensorName = rest.substr(0, space);
+
+                            CameraDeviceInfo info;
+                            info.id = 1000 + camIdx;
+                            info.v4l2Index = camIdx;
+                            info.type = CAM_TYPE_LIBCAMERA;
+
+                            std::string lowerSensor = sensorName;
+                            std::transform(lowerSensor.begin(), lowerSensor.end(), lowerSensor.begin(), ::tolower);
+
+                            if (lowerSensor.find("imx519") != std::string::npos) {
+                                info.name = "Arducam 16MP AF (IMX519)";
+                                info.isArducam = true;
+                                info.supportsAutofocus = true;
+                            } else if (lowerSensor.find("64mp") != std::string::npos ||
+                                       lowerSensor.find("hawkeye") != std::string::npos ||
+                                       lowerSensor.find("owlsight") != std::string::npos) {
+                                info.name = "Arducam 64MP AF (Hawkeye/OwlSight)";
+                                info.isArducam = true;
+                                info.supportsAutofocus = true;
+                            } else if (lowerSensor.find("ov9281") != std::string::npos) {
+                                info.name = "Arducam OV9281 Global Shutter";
+                                info.isArducam = true;
+                            } else if (lowerSensor.find("ar0234") != std::string::npos) {
+                                info.name = "Arducam AR0234 Global Shutter";
+                                info.isArducam = true;
+                            } else if (lowerSensor.find("imx462") != std::string::npos) {
+                                info.name = "Arducam IMX462 Low Light";
+                                info.isArducam = true;
+                            } else if (lowerSensor.find("imx708") != std::string::npos) {
+                                info.name = "Raspberry Pi Camera 3 (IMX708 AF)";
+                                info.isRaspberryPi = true;
+                                info.supportsAutofocus = true;
+                            } else if (lowerSensor.find("imx477") != std::string::npos) {
+                                info.name = "Raspberry Pi HQ Camera (IMX477)";
+                                info.isRaspberryPi = true;
+                            } else if (lowerSensor.find("imx219") != std::string::npos) {
+                                info.name = "Raspberry Pi Camera 2 (IMX219)";
+                                info.isRaspberryPi = true;
+                            } else if (lowerSensor.find("imx296") != std::string::npos) {
+                                info.name = "Raspberry Pi GS Camera (IMX296)";
+                                info.isRaspberryPi = true;
+                            } else if (lowerSensor.find("ov5647") != std::string::npos) {
+                                info.name = "Raspberry Pi Camera 1 (OV5647)";
+                                info.isRaspberryPi = true;
+                            } else {
+                                info.name = "Raspberry Pi Camera (" + sensorName + ")";
+                                info.isRaspberryPi = true;
+                            }
+
+                            info.description = "libcamera / CSI (" + sensorName + ")";
+                            info.pathOrPipeline = BuildLibcameraPipeline(1280, 720, 30, sensorName);
+                            list.push_back(info);
+                        }
+                    }
+                }
+                if (!list.empty()) return list;
+            }
+        }
+    }
+
+    // Check /sys/class/video4linux for unicam/pisp
+    DIR* d = opendir("/sys/class/video4linux");
+    if (d) {
+        struct dirent* entry;
+        bool hasCSI = false;
+        while ((entry = readdir(d)) != nullptr) {
+            std::string namePath = std::string("/sys/class/video4linux/") + entry->d_name + "/name";
+            std::ifstream nf(namePath);
+            if (nf.is_open()) {
+                std::string n;
+                std::getline(nf, n);
+                std::string lowerN = n;
+                std::transform(lowerN.begin(), lowerN.end(), lowerN.begin(), ::tolower);
+                if (lowerN.find("unicam") != std::string::npos || lowerN.find("pisp") != std::string::npos) {
+                    hasCSI = true;
+                    break;
+                }
+            }
+        }
+        closedir(d);
+        if (hasCSI) {
+            CameraDeviceInfo info;
+            info.id = 1000;
+            info.v4l2Index = 0;
+            info.type = CAM_TYPE_LIBCAMERA;
+            info.name = "Raspberry Pi / Arducam (libcamera)";
+            info.description = "CSI Camera via libcamerasrc";
+            info.pathOrPipeline = BuildLibcameraPipeline(1280, 720, 30);
+            info.isRaspberryPi = true;
+            info.isArducam = true;
+            info.supportsAutofocus = true;
+            list.push_back(info);
+        }
+    }
+    return list;
+}
+
+static std::vector<CameraDeviceInfo> ProbeV4L2Devices() {
+    std::vector<CameraDeviceInfo> list;
+    for (int i = 0; i < 64; ++i) {
+        std::string devPath = "/dev/video" + std::to_string(i);
+        int fd = open(devPath.c_str(), O_RDWR | O_NONBLOCK);
+        if (fd < 0) continue;
+
+        struct v4l2_capability vcap;
+        memset(&vcap, 0, sizeof(vcap));
+        if (ioctl(fd, VIDIOC_QUERYCAP, &vcap) == 0) {
+            uint32_t caps = vcap.device_caps ? vcap.device_caps : vcap.capabilities;
+
+#ifdef V4L2_CAP_META_CAPTURE
+            if (caps & V4L2_CAP_META_CAPTURE) { close(fd); continue; }
+#endif
+            if (caps & (V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VIDEO_CAPTURE_MPLANE)) {
+                std::string cardName = (const char*)vcap.card;
+                std::string driverName = (const char*)vcap.driver;
+                std::string lowerCard = cardName;
+                std::transform(lowerCard.begin(), lowerCard.end(), lowerCard.begin(), ::tolower);
+
+                // Filter out Raspberry Pi internal ISP and hardware codec device nodes
+                if (lowerCard.find("isp") != std::string::npos ||
+                    lowerCard.find("codec") != std::string::npos ||
+                    lowerCard.find("rpivid") != std::string::npos ||
+                    lowerCard.find("pispbe") != std::string::npos ||
+                    lowerCard.find("pispfe") != std::string::npos) {
+                    close(fd);
+                    continue;
+                }
+
+                CameraDeviceInfo info;
+                info.id = i;
+                info.v4l2Index = i;
+                info.pathOrPipeline = devPath;
+                info.type = CAM_TYPE_V4L2;
+
+                bool isArducam = (lowerCard.find("arducam") != std::string::npos);
+                bool isRPi = (lowerCard.find("unicam") != std::string::npos ||
+                              lowerCard.find("raspberry") != std::string::npos ||
+                              lowerCard.find("bcm2835") != std::string::npos);
+
+                info.isArducam = isArducam;
+                info.isRaspberryPi = isRPi;
+
+#ifdef V4L2_CID_FOCUS_AUTO
+                struct v4l2_queryctrl qctrl;
+                memset(&qctrl, 0, sizeof(qctrl));
+                qctrl.id = V4L2_CID_FOCUS_AUTO;
+                if (ioctl(fd, VIDIOC_QUERYCTRL, &qctrl) == 0 && !(qctrl.flags & V4L2_CTRL_FLAG_DISABLED)) {
+                    info.supportsAutofocus = true;
+                }
+#endif
+#ifdef V4L2_CID_FOCUS_ABSOLUTE
+                if (!info.supportsAutofocus) {
+                    struct v4l2_queryctrl qctrl;
+                    memset(&qctrl, 0, sizeof(qctrl));
+                    qctrl.id = V4L2_CID_FOCUS_ABSOLUTE;
+                    if (ioctl(fd, VIDIOC_QUERYCTRL, &qctrl) == 0 && !(qctrl.flags & V4L2_CTRL_FLAG_DISABLED)) {
+                        info.supportsAutofocus = true;
+                    }
+                }
+#endif
+
+                if (isArducam) {
+                    info.name = "Arducam USB (" + devPath + ")";
+                } else if (isRPi) {
+                    info.name = "Raspberry Pi Camera (" + devPath + ")";
+                } else {
+                    info.name = cardName + " (" + devPath + ")";
+                }
+                info.description = devPath + "  ·  " + driverName;
+
+                list.push_back(info);
+            }
+        }
+        close(fd);
+    }
+    return list;
+}
+#endif
+
+void RescanCameraDevices() {
+    g_availableDevices.clear();
+
+    const char* envCam = std::getenv("TULPAR_CAMERA");
+    if (envCam && envCam[0]) {
+        CameraDeviceInfo envDev;
+        envDev.id = 9999;
+        std::string camStr = envCam;
+        if (camStr.find("!") != std::string::npos || camStr.find("src") != std::string::npos) {
+            envDev.name = "Custom GStreamer (ENV)";
+            envDev.type = CAM_TYPE_GSTREAMER;
+            envDev.pathOrPipeline = camStr;
+            envDev.description = "TULPAR_CAMERA pipeline";
+        } else if (camStr == "libcamera" || camStr == "rpicam" || camStr == "arducam") {
+            envDev.name = "Raspberry Pi / Arducam (ENV)";
+            envDev.type = CAM_TYPE_LIBCAMERA;
+            envDev.pathOrPipeline = BuildLibcameraPipeline(1280, 720, 30);
+            envDev.isRaspberryPi = true;
+            envDev.isArducam = true;
+            envDev.supportsAutofocus = true;
+            envDev.description = "TULPAR_CAMERA libcamera";
+        } else if (camStr.rfind("/dev/video", 0) == 0) {
+            envDev.name = "Camera Device (" + camStr + ")";
+            envDev.type = CAM_TYPE_V4L2;
+            envDev.pathOrPipeline = camStr;
+            try { envDev.v4l2Index = std::stoi(camStr.substr(10)); } catch (...) { envDev.v4l2Index = 0; }
+            envDev.description = "TULPAR_CAMERA device";
+        } else {
+            try {
+                int idx = std::stoi(camStr);
+                envDev.id = idx;
+                envDev.v4l2Index = idx;
+                envDev.name = "Camera " + std::to_string(idx) + " (ENV)";
+                envDev.type = CAM_TYPE_V4L2;
+            } catch (...) {}
+        }
+        g_availableDevices.push_back(envDev);
+    }
+
+#ifdef __linux__
+    std::vector<CameraDeviceInfo> libcamDevs = ProbeLibcameraDevices();
+    for (auto& d : libcamDevs) g_availableDevices.push_back(d);
+
+    std::vector<CameraDeviceInfo> v4l2Devs = ProbeV4L2Devices();
+    for (auto& d : v4l2Devs) g_availableDevices.push_back(d);
+#else
+    for (int i = 0; i < 10; ++i) {
         cv::VideoCapture tempCap(i, cv::CAP_ANY);
         if (tempCap.isOpened()) {
-            availableIndices.push_back(i);
+            CameraDeviceInfo info;
+            info.id = i;
+            info.v4l2Index = i;
+            info.name = "Camera " + std::to_string(i);
+            info.type = CAM_TYPE_V4L2;
+            info.description = "Video Capture Device " + std::to_string(i);
+            g_availableDevices.push_back(info);
             tempCap.release();
         }
     }
-    return availableIndices;
+#endif
+
+    if (g_availableDevices.empty()) {
+        CameraDeviceInfo defDev;
+        defDev.id = 0;
+        defDev.v4l2Index = 0;
+        defDev.name = "Default Camera (0)";
+        defDev.type = CAM_TYPE_V4L2;
+        defDev.description = "Index 0";
+        g_availableDevices.push_back(defDev);
+    }
+}
+
+const std::vector<CameraDeviceInfo>& GetAvailableCameraDevices() {
+    if (g_availableDevices.empty()) {
+        RescanCameraDevices();
+    }
+    return g_availableDevices;
+}
+
+std::vector<int> GetAvailableCameraIndices() {
+    if (g_availableDevices.empty()) {
+        RescanCameraDevices();
+    }
+    std::vector<int> indices;
+    for (const auto& dev : g_availableDevices) {
+        indices.push_back(dev.id);
+    }
+    return indices;
+}
+
+const CameraDeviceInfo* GetCameraDeviceInfo(int id) {
+    if (g_availableDevices.empty()) RescanCameraDevices();
+    for (const auto& dev : g_availableDevices) {
+        if (dev.id == id) return &dev;
+    }
+    return nullptr;
+}
+
+CameraConfig& GetCameraConfig() {
+    return g_activeCameraConfig;
 }
 
 static GLuint CreateTexture() {
@@ -55,27 +388,173 @@ static GLuint CreateTexture() {
     return id;
 }
 
-static cv::Mat g_lastFrame; // last captured (unmirrored) frame, reused while paused
-
-bool InitializeWebcam(cv::VideoCapture& cap, CameraTextures& tex, int index) {
-    if (cap.isOpened()) cap.release();
-    g_lastFrame.release();
-
-    cap.open(index, cv::CAP_ANY);
+bool SetCameraFocus(cv::VideoCapture& cap, bool autoFocus, int manualVal) {
     if (!cap.isOpened()) return false;
+    bool ok = false;
+    if (autoFocus) {
+        if (cap.set(cv::CAP_PROP_AUTOFOCUS, 1)) ok = true;
+    } else {
+        cap.set(cv::CAP_PROP_AUTOFOCUS, 0);
+        if (cap.set(cv::CAP_PROP_FOCUS, (double)manualVal)) ok = true;
+    }
 
-    if (tex.input == 0) tex.input = CreateTexture();
-    if (tex.output == 0) tex.output = CreateTexture();
-    tex.width = tex.height = tex.outWidth = tex.outHeight = 0;
+#ifdef __linux__
+    CameraConfig& cfg = GetCameraConfig();
+    const CameraDeviceInfo* dev = GetCameraDeviceInfo(cfg.deviceId);
+    if (dev) {
+        if (dev->v4l2Index >= 0) {
+            std::string cmd;
+            if (autoFocus) {
+                cmd = "v4l2-ctl -d /dev/video" + std::to_string(dev->v4l2Index) + " -c focus_auto=1 >/dev/null 2>&1";
+            } else {
+                cmd = "v4l2-ctl -d /dev/video" + std::to_string(dev->v4l2Index) + " -c focus_auto=0 -c focus_absolute=" + std::to_string(manualVal) + " >/dev/null 2>&1";
+            }
+            if (system(cmd.c_str()) == 0) ok = true;
+        }
+        if (dev->isArducam && !autoFocus) {
+            for (int s = 0; s < 8; ++s) {
+                std::string subCmd = "v4l2-ctl -d /dev/v4l-subdev" + std::to_string(s) + " -c focus_absolute=" + std::to_string(manualVal) + " >/dev/null 2>&1";
+                if (system(subCmd.c_str()) == 0) { ok = true; break; }
+            }
+        }
+    }
+#endif
+    return ok;
+}
+
+bool TriggerCameraAutoFocus(cv::VideoCapture& cap) {
+    if (!cap.isOpened()) return false;
+    cap.set(cv::CAP_PROP_AUTOFOCUS, 1);
+#ifdef __linux__
+    CameraConfig& cfg = GetCameraConfig();
+    const CameraDeviceInfo* dev = GetCameraDeviceInfo(cfg.deviceId);
+    if (dev && dev->v4l2Index >= 0) {
+        std::string cmd = "v4l2-ctl -d /dev/video" + std::to_string(dev->v4l2Index) + " -c focus_auto=1 >/dev/null 2>&1";
+        system(cmd.c_str());
+    }
+#endif
     return true;
 }
 
+bool InitializeCameraWithConfig(cv::VideoCapture& cap, CameraTextures& tex, const CameraConfig& config) {
+    if (cap.isOpened()) cap.release();
+    g_lastFrame.release();
+
+    const CameraDeviceInfo* dev = GetCameraDeviceInfo(config.deviceId);
+    CameraType camType = dev ? dev->type : config.type;
+    std::string pathOrPipe = dev ? dev->pathOrPipeline : config.customPipeline;
+    int v4lIndex = dev ? dev->v4l2Index : config.deviceId;
+
+    bool opened = false;
+
+    // 1. If custom GStreamer pipeline or LIBCAMERA:
+    if (camType == CAM_TYPE_LIBCAMERA || camType == CAM_TYPE_GSTREAMER) {
+        std::string pipeline = pathOrPipe;
+        if (camType == CAM_TYPE_LIBCAMERA && (pipeline.empty() || config.width != 1280 || config.height != 720)) {
+            std::string sensorName = (dev && dev->isArducam) ? "imx519" : "";
+            pipeline = BuildLibcameraPipeline(config.width > 0 ? config.width : 1280,
+                                              config.height > 0 ? config.height : 720,
+                                              config.fps > 0 ? config.fps : 30,
+                                              sensorName);
+        }
+        if (!pipeline.empty()) {
+            cap.open(pipeline, cv::CAP_GSTREAMER);
+            if (cap.isOpened()) opened = true;
+        }
+    }
+
+    // 2. If V4L2 or opening pipeline failed, try standard V4L2 / CAP_ANY:
+    if (!opened) {
+        int backend = cv::CAP_ANY;
+#ifdef __linux__
+        backend = cv::CAP_V4L2;
+#endif
+        if (v4lIndex >= 0) {
+            cap.open(v4lIndex, backend);
+            if (!cap.isOpened() && backend != cv::CAP_ANY) {
+                cap.open(v4lIndex, cv::CAP_ANY);
+            }
+        } else if (!pathOrPipe.empty()) {
+            cap.open(pathOrPipe, backend);
+            if (!cap.isOpened() && backend != cv::CAP_ANY) {
+                cap.open(pathOrPipe, cv::CAP_ANY);
+            }
+        }
+        if (cap.isOpened()) {
+            opened = true;
+
+            // Zero-latency buffer configuration
+            cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+
+            // Pixel format: MJPG allows full framerate on Arducam & RPi USB
+            if (config.fourcc == 1 || (config.fourcc == 0 && dev && dev->isArducam)) {
+                cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
+            } else if (config.fourcc == 2) {
+                cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('Y', 'U', 'Y', 'V'));
+            }
+
+            // Set requested resolution & framerate
+            if (config.width > 0)  cap.set(cv::CAP_PROP_FRAME_WIDTH, config.width);
+            if (config.height > 0) cap.set(cv::CAP_PROP_FRAME_HEIGHT, config.height);
+            if (config.fps > 0)    cap.set(cv::CAP_PROP_FPS, config.fps);
+
+            SetCameraFocus(cap, config.autoFocus, config.manualFocus);
+        }
+    }
+
+    // 3. Fallback: On Linux/Raspberry Pi, if standard open failed on index 0, try libcamera!
+#ifdef __linux__
+    if (!opened && (v4lIndex == 0 || config.deviceId == 0)) {
+        std::string fallbackPipe = BuildLibcameraPipeline(1280, 720, 30);
+        cap.open(fallbackPipe, cv::CAP_GSTREAMER);
+        if (cap.isOpened()) opened = true;
+    }
+#endif
+
+    if (!opened) return false;
+
+    double actualW = cap.get(cv::CAP_PROP_FRAME_WIDTH);
+    double actualH = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
+    if (actualW > 0 && actualH > 0) {
+        tex.width = (int)actualW;
+        tex.height = (int)actualH;
+    }
+
+    if (tex.input == 0) tex.input = CreateTexture();
+    if (tex.output == 0) tex.output = CreateTexture();
+    return true;
+}
+
+bool InitializeWebcam(cv::VideoCapture& cap, CameraTextures& tex, int index) {
+    CameraConfig& cfg = GetCameraConfig();
+    cfg.deviceId = index;
+    const CameraDeviceInfo* dev = GetCameraDeviceInfo(index);
+    if (dev) {
+        cfg.type = dev->type;
+        cfg.isArducam = dev->isArducam;
+        cfg.isRaspberryPi = dev->isRaspberryPi;
+        cfg.supportsAutofocus = dev->supportsAutofocus;
+        cfg.cameraName = dev->name;
+    }
+    return InitializeCameraWithConfig(cap, tex, cfg);
+}
+
 static void Upload(GLuint id, cv::Mat img) {
+    if (img.channels() == 1)      cv::cvtColor(img, img, cv::COLOR_GRAY2BGR);
+    else if (img.channels() == 4) cv::cvtColor(img, img, cv::COLOR_BGRA2BGR);
     if (!img.isContinuous()) img = img.clone();
     glBindTexture(GL_TEXTURE_2D, id);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1); // rows of 3-byte pixels aren't always 4-byte aligned
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, img.cols, img.rows, 0, GL_BGR, GL_UNSIGNED_BYTE, img.ptr());
 }
+
+void UploadImageTexture(GLuint& id, const cv::Mat& img) {
+    if (img.empty()) return;
+    if (id == 0) id = CreateTexture();
+    Upload(id, img);
+}
+
+const cv::Mat& GetLastFrame() { return g_lastFrame; }
 
 void DestroyTextures(CameraTextures& tex) {
     if (tex.input) glDeleteTextures(1, &tex.input);
@@ -335,6 +814,11 @@ static std::string FindCascade(const std::string& file) {
         if (std::filesystem::exists(p)) return p.string();
     }
     return {};
+}
+
+std::string FindCascadeFile(int type) {
+    if (type < 0 || type >= CASCADE_COUNT) return {};
+    return FindCascade(kCascadeFiles[type]);
 }
 
 static bool LoadCascade(cv::CascadeClassifier& cc, int& loadedType, int type, std::string& error) {

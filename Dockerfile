@@ -1,4 +1,5 @@
 # Linux build of TULPAR (Ubuntu 22.04, OpenCV 4.5, GLFW 3.3).
+# Supports USB cameras, Arducam, and Raspberry Pi Cameras (libcamera/GStreamer).
 #
 #   docker build -t tulpar .
 #
@@ -6,6 +7,10 @@
 #   xhost +local:docker
 #   docker run --rm -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
 #       --device /dev/video0 tulpar
+#
+# For Arducam / Raspberry Pi cameras (V4L2 + subdevices):
+#   docker run --rm -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
+#       --privileged --device /dev/video0 tulpar
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -18,6 +23,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         opencv-data \
         libgl1-mesa-dev \
         libglfw3-dev \
+        libv4l-dev \
+        v4l-utils \
+        gstreamer1.0-tools \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good \
+        gstreamer1.0-plugins-bad \
+        libgstreamer1.0-dev \
+        libgstreamer-plugins-base1.0-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

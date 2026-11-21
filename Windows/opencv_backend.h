@@ -140,6 +140,42 @@ struct RuntimeControl {
     bool paused = false;
     bool snapshotRequested = false;
     std::string lastSnapshot;            // path of the last saved snapshot (or error)
+    bool showCameraSettings = false;     // opens the camera / sensor settings modal
+};
+
+enum CameraType {
+    CAM_TYPE_V4L2 = 0,         // Standard V4L2 / UVC webcam / Arducam USB
+    CAM_TYPE_LIBCAMERA,        // Raspberry Pi Camera / Arducam CSI via libcamerasrc GStreamer
+    CAM_TYPE_GSTREAMER,        // Custom GStreamer pipeline
+    CAM_TYPE_CUSTOM_PATH       // Direct device path (/dev/videoX) or stream URL
+};
+
+struct CameraDeviceInfo {
+    int id = 0;                         // Unique ID used in availableCameras
+    int v4l2Index = -1;                 // System video index e.g. 0 for /dev/video0, or -1
+    std::string name;                   // Human-readable name e.g. "Arducam 16MP AF (IMX519)"
+    std::string description;            // e.g. "/dev/video0 · MJPG/YUYV", "libcamera / CSI"
+    std::string pathOrPipeline;         // Device path or GStreamer pipeline string
+    CameraType type = CAM_TYPE_V4L2;
+    bool isArducam = false;             // True if identified as Arducam (CSI or USB)
+    bool isRaspberryPi = false;         // True if identified as Raspberry Pi camera
+    bool supportsAutofocus = false;     // True if hardware supports autofocus (e.g. IMX519, 64MP, IMX708, USB AF)
+};
+
+struct CameraConfig {
+    int deviceId = 0;                   // Active camera ID from CameraDeviceInfo
+    CameraType type = CAM_TYPE_V4L2;
+    int width = 1280;                   // Requested capture width (0 = camera default)
+    int height = 720;                   // Requested capture height (0 = camera default)
+    int fps = 30;                       // Requested framerate (0 = camera default)
+    int fourcc = 0;                     // 0 = Auto, 1 = MJPG, 2 = YUYV
+    bool autoFocus = true;              // Hardware autofocus toggle (if supported)
+    int manualFocus = 500;              // Manual focus distance value (0..1023)
+    std::string customPipeline;         // User-specified GStreamer pipeline or path
+    std::string cameraName;             // Active camera display name
+    bool isArducam = false;
+    bool isRaspberryPi = false;
+    bool supportsAutofocus = false;
 };
 
 struct DetectionStats {
@@ -171,9 +207,24 @@ struct CameraTextures {
     int outWidth = 0, outHeight = 0;     // output size (depends on scale)
 };
 
+// Camera enumeration & control
 std::vector<int> GetAvailableCameraIndices();
+const std::vector<CameraDeviceInfo>& GetAvailableCameraDevices();
+void RescanCameraDevices();
+const CameraDeviceInfo* GetCameraDeviceInfo(int id);
+CameraConfig& GetCameraConfig();
+
 bool InitializeWebcam(cv::VideoCapture& cap, CameraTextures& tex, int index);
+bool InitializeCameraWithConfig(cv::VideoCapture& cap, CameraTextures& tex, const CameraConfig& config);
+bool SetCameraFocus(cv::VideoCapture& cap, bool autoFocus, int manualVal);
+bool TriggerCameraAutoFocus(cv::VideoCapture& cap);
+std::string BuildLibcameraPipeline(int width, int height, int fps, const std::string& cameraName = "");
 void UpdateWebcamTextures(cv::VideoCapture& cap, CameraTextures& tex, const EffectsSettings& settings,
                           RuntimeControl& control, DetectionStats& stats);
 void DestroyTextures(CameraTextures& tex);
+
+// Helpers shared with the node editor
+const cv::Mat& GetLastFrame();                          // last captured (unmirrored) camera frame
+void UploadImageTexture(GLuint& id, const cv::Mat& img); // creates the texture if id == 0; 1/3/4 channels
+std::string FindCascadeFile(int cascadeType);           // full path of a Haar cascade, empty if not found
 #endif

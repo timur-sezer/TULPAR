@@ -85,8 +85,11 @@ add_executable(TULPAR
     Windows/opencv_backend.cpp
     Windows/imgui_opengl.h
     Windows/imgui_opengl.cpp
+    Windows/node_editor.h
+    Windows/node_editor.cpp
     Windows/font.h
-    Windows/font.cpp)
+    Windows/font.cpp
+    Windows/icons.h)
 
 target_include_directories(TULPAR PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(TULPAR PRIVATE glad imgui ${GLFW_TARGET} OpenGL::GL ${OpenCV_LIBS})

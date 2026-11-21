@@ -38,7 +38,7 @@ int main(void) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 #endif
 
-    GLFWwindow* window = glfwCreateWindow(1400, 800, "TULPAR - Webcam Processing", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(1400, 800, "TULPAR", NULL, NULL);
     if (!window) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1); 
